@@ -140,6 +140,8 @@ class KubeSpawner(Spawner):
         self.pvc_name = self._expand_user_properties(self.pvc_name_template)
         if self.working_dir:
             self.working_dir = self._expand_user_properties(self.working_dir)
+        if self.ip:
+            self.ip = self.expand_hostname(self.ip)
         if self.port == 0:
             # Our default port is 8888
             self.port = 8888
@@ -201,6 +203,9 @@ class KubeSpawner(Spawner):
 
         We override this from the parent so we can set a more sane default for
         the Kubernetes setup.
+
+        `{username}` and `{userid}` are expanded to the escaped, hostname safe
+        username & integer user id respectively.
         """
     )
 
@@ -815,6 +820,9 @@ class KubeSpawner(Spawner):
         The `key` could be either a camelCase word (used by Kubernetes yaml,
         e.g. `restartPolicy`) or a snake_case word (used by Kubernetes Python
         client, e.g. `dns_policy`).
+
+        `{username}` and `{userid}` are expanded to the escaped, dns-label safe
+        username & integer user id respectively, wherever they are used.
         """
     )
 
@@ -1234,6 +1242,14 @@ class KubeSpawner(Spawner):
             unescaped_servername=servername
         )
 
+    def _expand_hostname(self, ip):
+        # Allow . to be included
+        hostname_safe_chars = set(string.ascii_lowercase + string.digits + '.')
+        if len(ip) > 255:
+            return "0.0.0.0"
+        safe_hostname = escapism.escape(servername, safe=hostname_safe_chars, escape_char='-').lower()
+        return safe_hostname
+
     def _expand_all(self, src):
         if isinstance(src, list):
             return [self._expand_all(i) for i in src]
@@ -1302,6 +1318,7 @@ class KubeSpawner(Spawner):
 
         labels = self._build_pod_labels(self._expand_all(self.extra_labels))
         annotations = self._build_common_annotations(self._expand_all(self.extra_annotations))
+        extra_pod_config = self._expand_all(self.extra_pod_config)
 
         return make_pod(
             name=self.pod_name,
@@ -1332,7 +1349,7 @@ class KubeSpawner(Spawner):
             init_containers=self._expand_all(self.init_containers),
             service_account=self.service_account,
             extra_container_config=self.extra_container_config,
-            extra_pod_config=self.extra_pod_config,
+            extra_pod_config=extra_pod_config,
             extra_containers=self.extra_containers,
             scheduler_name=self.scheduler_name,
             tolerations=self.tolerations,
@@ -1729,7 +1746,7 @@ class KubeSpawner(Spawner):
                     ]
                 ),
             )
-        return (pod.status.pod_ip, self.port)
+        return (self.ip, self.port)
 
     @gen.coroutine
     def stop(self, now=False):
